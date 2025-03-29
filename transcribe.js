@@ -1,15 +1,20 @@
 #!/usr/bin/env node
 
-require('dotenv').config();
-const { createClient } = require("@deepgram/sdk");
-const fs = require("fs");
-const path = require("path");
-const glob = require("glob");
-const util = require('util');
-const chalk = require('chalk');
-const ora = require('ora');
-const Table = require('cli-table3');
-const cliProgress = require('cli-progress');
+import 'dotenv/config';
+import { createClient } from '@deepgram/sdk';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { glob } from 'glob';
+import util from 'util';
+import chalk from 'chalk';
+import ora from 'ora';
+import Table from 'cli-table3';
+import cliProgress from 'cli-progress';
+
+// Get the directory name
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Deepgram pricing information (as of March 2025)
 // You may need to update these prices if they change
@@ -197,6 +202,39 @@ const transcribeFile = async (inputFilePath) => {
   cliStatus.isProcessing = true;
   cliStatus.currentFile = path.basename(inputFilePath);
   
+  // Check if transcript already exists
+  const outputPath = `${inputFilePath}.txt`;
+  if (fs.existsSync(outputPath)) {
+    // Skip file if transcript already exists
+    spinner.info(chalk.cyan(`Skipped: ${cliStatus.currentFile} (transcript already exists)`));
+    logger.fileLog(`Skipped transcription of ${inputFilePath} - transcript already exists at ${outputPath}`);
+    cliStatus.isProcessing = false;
+    cliStatus.filesProcessed++;
+    
+    // Try to get the file stats to add to the summary if available
+    try {
+      const fileStats = fs.statSync(inputFilePath);
+      const fileSizeMB = (fileStats.size / (1024 * 1024)).toFixed(2);
+      const transcriptContent = fs.readFileSync(outputPath, 'utf8');
+      
+      // Add to results with estimated values
+      cliStatus.fileResults.push({
+        file: inputFilePath,
+        filename: path.basename(inputFilePath),
+        cost: 0, // No cost since we're skipping
+        duration: 0, // We don't know without processing
+        model: 'skipped',
+        fileSize: fileSizeMB,
+        charactersGenerated: transcriptContent.length,
+        skipped: true
+      });
+    } catch (err) {
+      logger.fileLog(`Error getting file stats for skipped file ${inputFilePath}: ${err.message}`);
+    }
+    
+    return true;
+  }
+  
   // Start the spinner
   spinner.text = `Processing: ${cliStatus.currentFile}`;
   spinner.start();
@@ -259,7 +297,6 @@ const transcribeFile = async (inputFilePath) => {
     cliStatus.filesProcessed++;
     
     // STEP 5: Write the transcript to a file without printing it
-    const outputPath = `${inputFilePath}.txt`;
     fs.writeFileSync(outputPath, paragraphText);
     
     // Update spinner with success message
@@ -329,7 +366,7 @@ const processFiles = async () => {
     } 
     // Otherwise treat it as a glob pattern
     else {
-      const matches = glob.sync(pattern);
+      const matches = await glob(pattern);
       logger.fileLog(`Pattern '${pattern}' matched ${matches.length} files`);
       filesToProcess = filesToProcess.concat(matches);
       spinner.text = `Found ${filesToProcess.length} files to process...`;
@@ -396,13 +433,14 @@ const processFiles = async () => {
     const fileTable = new Table({
       head: [
         chalk.blue.bold('File'), 
+        chalk.blue.bold('Status'),
         chalk.blue.bold('Duration (min)'), 
         chalk.blue.bold('Cost'), 
         chalk.blue.bold('Size (MB)'),
         chalk.blue.bold('Model')
       ],
       style: { head: [], border: [] },
-      colWidths: [30, 15, 15, 12, 15]
+      colWidths: [30, 10, 15, 15, 12, 15]
     });
     
     // Sort by cost (most expensive first)
@@ -410,10 +448,15 @@ const processFiles = async () => {
     
     // Add rows for each file
     cliStatus.fileResults.forEach(result => {
+      const status = result.skipped ? chalk.cyan('Skipped') : chalk.green('Processed');
+      const duration = result.skipped ? '-' : chalk.yellow((result.duration / 60).toFixed(2));
+      const cost = result.skipped ? '$0.0000' : chalk.green('$' + result.cost.toFixed(4));
+      
       fileTable.push([
         chalk.white(result.filename),
-        chalk.yellow((result.duration / 60).toFixed(2)),
-        chalk.green('$' + result.cost.toFixed(4)),
+        status,
+        duration,
+        cost,
         chalk.cyan(result.fileSize),
         chalk.magenta(result.model)
       ]);
