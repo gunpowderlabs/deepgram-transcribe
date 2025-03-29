@@ -6,6 +6,10 @@ const fs = require("fs");
 const path = require("path");
 const glob = require("glob");
 const util = require('util');
+const chalk = require('chalk');
+const ora = require('ora');
+const Table = require('cli-table3');
+const cliProgress = require('cli-progress');
 
 // Deepgram pricing information (as of March 2025)
 // You may need to update these prices if they change
@@ -33,45 +37,189 @@ const LOG_FILE = path.join(LOGS_DIR, `deepgram-${new Date().toISOString().replac
 // Create a write stream to the log file
 const logStream = fs.createWriteStream(LOG_FILE, { flags: 'a' });
 
-// Custom logger that writes to both console and file with timestamps
+// CLI spinner for showing progress
+const spinner = ora({
+  text: 'Starting transcription...',
+  color: 'blue',
+  spinner: 'dots'
+});
+
+// Progress bar for batch processing
+const multibar = new cliProgress.MultiBar({
+  clearOnComplete: false,
+  hideCursor: true,
+  format: ' {bar} | {filename} | {percentage}% | {value}/{total} seconds'
+}, cliProgress.Presets.shades_grey);
+
+// Status object for the CLI
+const cliStatus = {
+  isProcessing: false,
+  currentFile: null,
+  progressBar: null,
+  filesProcessed: 0,
+  totalFiles: 0,
+  totalCost: 0,
+  fileResults: []
+};
+
+// Enhanced logger that writes to both console and file with timestamps and colors
 const logger = {
+  // File logging only
+  fileLog: function(message) {
+    const timestamp = new Date().toISOString();
+    const logMessage = `[${timestamp}] ${message}`;
+    logStream.write(logMessage + '\n');
+  },
+  
+  // Both console and file
   log: function(...args) {
     const timestamp = new Date().toISOString();
     const message = util.format(...args);
     const logMessage = `[${timestamp}] ${message}`;
     
-    // Write to console
-    console.log(message);
+    // If we're currently processing a file, use the spinner
+    if (cliStatus.isProcessing) {
+      spinner.text = message;
+    } else {
+      console.log(chalk.blue(message));
+    }
     
     // Write to file
     logStream.write(logMessage + '\n');
   },
   
+  // Success message (green)
+  success: function(...args) {
+    const timestamp = new Date().toISOString();
+    const message = util.format(...args);
+    const logMessage = `[${timestamp}] SUCCESS: ${message}`;
+    
+    if (!cliStatus.isProcessing) {
+      console.log(chalk.green(message));
+    }
+    
+    // Write to file
+    logStream.write(logMessage + '\n');
+  },
+  
+  // Information message (cyan)
+  info: function(...args) {
+    const timestamp = new Date().toISOString();
+    const message = util.format(...args);
+    const logMessage = `[${timestamp}] INFO: ${message}`;
+    
+    if (!cliStatus.isProcessing) {
+      console.log(chalk.cyan(message));
+    }
+    
+    // Write to file
+    logStream.write(logMessage + '\n');
+  },
+  
+  // Warning message (yellow)
+  warn: function(...args) {
+    const timestamp = new Date().toISOString();
+    const message = util.format(...args);
+    const logMessage = `[${timestamp}] WARNING: ${message}`;
+    
+    // Always show warnings
+    spinner.stop();
+    console.log(chalk.yellow('⚠️  ' + message));
+    if (cliStatus.isProcessing) {
+      spinner.start();
+    }
+    
+    // Write to file
+    logStream.write(logMessage + '\n');
+  },
+  
+  // Error message (red)
   error: function(...args) {
     const timestamp = new Date().toISOString();
     const message = util.format(...args);
     const logMessage = `[${timestamp}] ERROR: ${message}`;
     
-    // Write to console
-    console.error(message);
+    // Always show errors
+    spinner.stop();
+    console.error(chalk.red('❌ ' + message));
+    if (cliStatus.isProcessing) {
+      spinner.start();
+    }
     
     // Write to file
     logStream.write(logMessage + '\n');
   }
 };
 
+// Helper function to calculate cost
+const calculateCost = (durationInSeconds, modelInfo) => {
+  // Extract the model name from the metadata
+  let modelName = null;
+  
+  // Try to find the model name from the metadata
+  if (modelInfo) {
+    // Get the first model key
+    const modelKey = Object.keys(modelInfo)[0];
+    if (modelKey && modelInfo[modelKey]) {
+      // Extract the model name from arch or name property
+      const modelData = modelInfo[modelKey];
+      modelName = modelData.arch || modelData.name;
+      
+      // For models like "general-nova-3", extract just "nova-3"
+      if (modelName && modelName.includes('nova')) {
+        if (modelName.includes('nova-2')) modelName = 'nova-2';
+        else if (modelName.includes('nova-3')) modelName = 'nova-3';
+      }
+    }
+  }
+  
+  // Get the price per minute for the model
+  const pricePerMinute = modelName && PRICING[modelName] 
+    ? PRICING[modelName] 
+    : PRICING['nova-3']; // Default to nova-3 if model not found
+  
+  // Convert seconds to minutes
+  const durationInMinutes = durationInSeconds / 60;
+  
+  // Calculate the cost
+  const cost = durationInMinutes * pricePerMinute;
+  
+  return {
+    model: modelName || 'unknown',
+    pricePerMinute,
+    durationInMinutes,
+    estimatedCost: cost
+  };
+};
+
 const transcribeFile = async (inputFilePath) => {
-  logger.log(`Processing: ${inputFilePath}`);
+  // Set status for UI updates
+  cliStatus.isProcessing = true;
+  cliStatus.currentFile = path.basename(inputFilePath);
+  
+  // Start the spinner
+  spinner.text = `Processing: ${cliStatus.currentFile}`;
+  spinner.start();
+  
+  // Log to file only
+  logger.fileLog(`Processing: ${inputFilePath}`);
   
   // STEP 1: Create a Deepgram client using the API key
   const deepgram = createClient(process.env.DEEPGRAM_API_KEY);
 
   try {
+    // Read the file and get its stats
+    spinner.text = `Reading file: ${cliStatus.currentFile}`;
+    const fileBuffer = fs.readFileSync(inputFilePath);
+    const fileStats = fs.statSync(inputFilePath);
+    const fileSizeMB = (fileStats.size / (1024 * 1024)).toFixed(2);
+    
+    // Update spinner with file size info
+    spinner.text = `Sending ${fileSizeMB} MB to Deepgram API: ${cliStatus.currentFile}`;
+    
     // STEP 2: Call the transcribeFile method with the audio payload and options
-    logger.log(`Reading file and sending to Deepgram API...`);
     const { result, error } = await deepgram.listen.prerecorded.transcribeFile(
-      // path to the audio file
-      fs.readFileSync(inputFilePath),
+      fileBuffer,
       // STEP 3: Configure Deepgram options for audio analysis
       {
         model: "nova-3",
@@ -94,67 +242,41 @@ const transcribeFile = async (inputFilePath) => {
         }).join('\n\n')
       : transcript;
 
-    // Log metadata about the transcription
-    logger.log(`Transcription complete for ${inputFilePath}`);
-    logger.log(`Duration: ${result.metadata.duration} seconds`);
-    
-    // Calculate the cost of the transcription
-    const calculateCost = (durationInSeconds, modelInfo) => {
-      // Extract the model name from the metadata
-      let modelName = null;
-      
-      // Try to find the model name from the metadata
-      if (modelInfo) {
-        // Get the first model key
-        const modelKey = Object.keys(modelInfo)[0];
-        if (modelKey && modelInfo[modelKey]) {
-          // Extract the model name from arch or name property
-          const modelData = modelInfo[modelKey];
-          modelName = modelData.arch || modelData.name;
-          
-          // For models like "general-nova-3", extract just "nova-3"
-          if (modelName && modelName.includes('nova')) {
-            if (modelName.includes('nova-2')) modelName = 'nova-2';
-            else if (modelName.includes('nova-3')) modelName = 'nova-3';
-          }
-        }
-      }
-      
-      // Get the price per minute for the model
-      const pricePerMinute = modelName && PRICING[modelName] 
-        ? PRICING[modelName] 
-        : PRICING['nova-3']; // Default to nova-3 if model not found
-      
-      // Convert seconds to minutes
-      const durationInMinutes = durationInSeconds / 60;
-      
-      // Calculate the cost
-      const cost = durationInMinutes * pricePerMinute;
-      
-      return {
-        model: modelName || 'unknown',
-        pricePerMinute,
-        durationInMinutes,
-        estimatedCost: cost
-      };
-    };
-    
-    // Calculate and log the cost
+    // Calculate the cost
     const costInfo = calculateCost(result.metadata.duration, result.metadata.model_info);
     
-    // Store cost info in global for batch processing summary
-    global.lastTranscriptionCost = costInfo.estimatedCost;
-    global.lastTranscriptionDuration = result.metadata.duration;
+    // Store result in CLI status for batch summary
+    cliStatus.fileResults.push({
+      file: inputFilePath,
+      filename: path.basename(inputFilePath),
+      cost: costInfo.estimatedCost,
+      duration: result.metadata.duration,
+      model: costInfo.model,
+      fileSize: fileSizeMB,
+      charactersGenerated: paragraphText.length
+    });
+    cliStatus.totalCost += costInfo.estimatedCost;
+    cliStatus.filesProcessed++;
     
-    // Log key metadata in a more readable format
-    logger.log(`File: ${inputFilePath}`);
-    logger.log(`Duration: ${result.metadata.duration.toFixed(2)} seconds (${(result.metadata.duration / 60).toFixed(2)} minutes)`);
-    logger.log(`Model: ${costInfo.model}`);
-    logger.log(`Cost: $${costInfo.estimatedCost.toFixed(4)} ($${costInfo.pricePerMinute.toFixed(4)}/minute)`);
+    // STEP 5: Write the transcript to a file without printing it
+    const outputPath = `${inputFilePath}.txt`;
+    fs.writeFileSync(outputPath, paragraphText);
+    
+    // Update spinner with success message
+    spinner.succeed(chalk.green(`Processed: ${cliStatus.currentFile} (${(result.metadata.duration / 60).toFixed(2)} min, $${costInfo.estimatedCost.toFixed(4)})`));
+    cliStatus.isProcessing = false;
+    
+    // Log detailed info to file
+    logger.fileLog(`Transcription complete for ${inputFilePath}`);
+    logger.fileLog(`Duration: ${result.metadata.duration.toFixed(2)} seconds (${(result.metadata.duration / 60).toFixed(2)} minutes)`);
+    logger.fileLog(`Model: ${costInfo.model}`);
+    logger.fileLog(`Cost: $${costInfo.estimatedCost.toFixed(4)} ($${costInfo.pricePerMinute.toFixed(4)}/minute)`);
+    logger.fileLog(`File size: ${fileSizeMB} MB`);
+    logger.fileLog(`Transcript saved to: ${outputPath} (${paragraphText.length} characters)`);
     
     // Include full metadata in debug logs
     if (process.env.DEBUG_LOGS === 'true') {
-      logger.log(`Full Metadata: ${JSON.stringify({
+      logger.fileLog(`Full Metadata: ${JSON.stringify({
         duration: result.metadata.duration,
         channels: result.metadata.channels,
         model: result.metadata.model_info,
@@ -162,89 +284,76 @@ const transcribeFile = async (inputFilePath) => {
       }, null, 2)}`);
     }
     
-    // STEP 6: Write the transcript to a file without printing it
-    const outputPath = `${inputFilePath}.txt`;
-    fs.writeFileSync(outputPath, paragraphText);
-    logger.log(`Transcript saved to: ${outputPath} (${paragraphText.length} characters)`);
-    
     return true;
   } catch (err) {
+    spinner.fail(chalk.red(`Failed: ${cliStatus.currentFile}`));
     logger.error(`Error during transcription of ${inputFilePath}:`, err);
+    cliStatus.isProcessing = false;
     return false;
   }
 };
 
 // Main function to process files
 const processFiles = async () => {
+  // Clear the screen for a clean UI
+  process.stdout.write('\x1Bc');
+  
+  // Display a fancy header
+  console.log(chalk.bold.blue('\n📝 DEEPGRAM TRANSCRIPTION CLI 📝'));
+  console.log(chalk.blue('─'.repeat(50)));
+  
   // Log startup info
-  logger.log(`Deepgram Transcription Started`);
-  logger.log(`Logging to file: ${LOG_FILE}`);
+  logger.info(`Deepgram Transcription Started`);
+  logger.fileLog(`Logging to file: ${LOG_FILE}`);
   
   // Get input patterns from command line arguments
   const filePatterns = process.argv.slice(2);
   
   if (filePatterns.length === 0) {
     logger.error("Please provide at least one file path or pattern as an argument");
+    console.log('\n' + chalk.yellow('Usage: node transcribe.js "*.mp3"'));
     process.exit(1);
   }
 
-  logger.log(`Processing patterns: ${filePatterns.join(', ')}`);
+  logger.info(`Processing patterns: ${filePatterns.join(', ')}`);
 
   // Expand all glob patterns into file paths
+  spinner.start('Finding files to process...');
   let filesToProcess = [];
   
   for (const pattern of filePatterns) {
     // If it's a direct file path that exists, add it
     if (fs.existsSync(pattern) && fs.statSync(pattern).isFile()) {
       filesToProcess.push(pattern);
+      spinner.text = `Found ${filesToProcess.length} files to process...`;
     } 
     // Otherwise treat it as a glob pattern
     else {
       const matches = glob.sync(pattern);
-      logger.log(`Pattern '${pattern}' matched ${matches.length} files`);
+      logger.fileLog(`Pattern '${pattern}' matched ${matches.length} files`);
       filesToProcess = filesToProcess.concat(matches);
+      spinner.text = `Found ${filesToProcess.length} files to process...`;
     }
   }
   
   if (filesToProcess.length === 0) {
-    logger.error("No matching files found for the provided patterns");
+    spinner.fail(chalk.red("No matching files found for the provided patterns"));
     process.exit(1);
   }
   
-  logger.log(`Found ${filesToProcess.length} files to process`);
+  // Initialize CLI status
+  cliStatus.totalFiles = filesToProcess.length;
+  
+  // Success message about files found
+  spinner.succeed(chalk.green(`Found ${filesToProcess.length} files to process`));
   
   // Process each file
-  let successCount = 0;
-  let totalCost = 0;
-  let totalDuration = 0;
   const startTime = Date.now();
-  const fileResults = [];
   
+  // Process files in sequence
   for (const file of filesToProcess) {
     try {
-      // Add a hook to capture the cost from the transcription process
-      global.lastTranscriptionCost = null;
-      global.lastTranscriptionDuration = null;
-      
-      const success = await transcribeFile(file);
-      
-      if (success) {
-        successCount++;
-        
-        // Collect cost information if available
-        if (global.lastTranscriptionCost) {
-          totalCost += global.lastTranscriptionCost;
-          fileResults.push({
-            file,
-            cost: global.lastTranscriptionCost,
-            duration: global.lastTranscriptionDuration
-          });
-          
-          if (global.lastTranscriptionDuration) {
-            totalDuration += global.lastTranscriptionDuration;
-          }
-        }
-      }
+      await transcribeFile(file);
     } catch (err) {
       logger.error(`Unexpected error processing ${file}: ${err}`);
     }
@@ -252,20 +361,78 @@ const processFiles = async () => {
   
   const processingDuration = (Date.now() - startTime) / 1000;
   
-  // Log processing summary with costs
-  logger.log(`\n===== Transcription Summary =====`);
-  logger.log(`Files processed: ${successCount} of ${filesToProcess.length}`);
-  logger.log(`Total audio duration: ${(totalDuration / 60).toFixed(2)} minutes`);
-  logger.log(`Total processing time: ${processingDuration.toFixed(2)} seconds`);
-  logger.log(`Total estimated cost: $${totalCost.toFixed(4)}`);
+  // Calculate total duration
+  const totalDuration = cliStatus.fileResults.reduce((sum, result) => sum + result.duration, 0);
   
-  // Log individual file costs
-  if (fileResults.length > 0) {
-    logger.log(`\n===== File Cost Breakdown =====`);
-    fileResults.forEach(result => {
-      logger.log(`${result.file}: $${result.cost.toFixed(4)} (${(result.duration / 60).toFixed(2)} minutes)`);
+  // Clear the space for summary
+  console.log('\n\n');
+  
+  // Create a summary table
+  const summaryTable = new Table({
+    head: [
+      chalk.blue.bold('Summary Metric'), 
+      chalk.blue.bold('Value')
+    ],
+    style: { head: [], border: [] }
+  });
+  
+  // Add rows to the summary table
+  summaryTable.push(
+    ['Files Processed', `${chalk.green(cliStatus.filesProcessed)} of ${cliStatus.totalFiles}`],
+    ['Total Audio Duration', `${chalk.yellow((totalDuration / 60).toFixed(2))} minutes`],
+    ['Total Processing Time', `${chalk.yellow(processingDuration.toFixed(2))} seconds`],
+    ['Total Estimated Cost', `${chalk.green('$' + cliStatus.totalCost.toFixed(4))}`],
+    ['Log File', `${chalk.cyan(LOG_FILE)}`]
+  );
+  
+  // Print the summary table with a title
+  console.log(chalk.bold.blue('\n📊 TRANSCRIPTION SUMMARY 📊'));
+  console.log(summaryTable.toString());
+  
+  // Create a table for file details if there are results
+  if (cliStatus.fileResults.length > 0) {
+    console.log(chalk.bold.blue('\n📋 FILE BREAKDOWN 📋'));
+    
+    const fileTable = new Table({
+      head: [
+        chalk.blue.bold('File'), 
+        chalk.blue.bold('Duration (min)'), 
+        chalk.blue.bold('Cost'), 
+        chalk.blue.bold('Size (MB)'),
+        chalk.blue.bold('Model')
+      ],
+      style: { head: [], border: [] },
+      colWidths: [30, 15, 15, 12, 15]
     });
+    
+    // Sort by cost (most expensive first)
+    cliStatus.fileResults.sort((a, b) => b.cost - a.cost);
+    
+    // Add rows for each file
+    cliStatus.fileResults.forEach(result => {
+      fileTable.push([
+        chalk.white(result.filename),
+        chalk.yellow((result.duration / 60).toFixed(2)),
+        chalk.green('$' + result.cost.toFixed(4)),
+        chalk.cyan(result.fileSize),
+        chalk.magenta(result.model)
+      ]);
+    });
+    
+    // Print the file table
+    console.log(fileTable.toString());
   }
+  
+  // Final success message
+  console.log('\n' + chalk.green.bold('✨ Transcription complete! ✨'));
+  console.log(chalk.blue('─'.repeat(50)) + '\n');
+  
+  // Log to file for record keeping
+  logger.fileLog(`\n===== Transcription Summary =====`);
+  logger.fileLog(`Files processed: ${cliStatus.filesProcessed} of ${cliStatus.totalFiles}`);
+  logger.fileLog(`Total audio duration: ${(totalDuration / 60).toFixed(2)} minutes`);
+  logger.fileLog(`Total processing time: ${processingDuration.toFixed(2)} seconds`);
+  logger.fileLog(`Total estimated cost: $${cliStatus.totalCost.toFixed(4)}`);
   
   // Close the log stream
   logStream.end();
@@ -292,4 +459,3 @@ process.on('exit', () => {
 
 // Run the main function
 processFiles();
-
