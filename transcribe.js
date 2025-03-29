@@ -146,28 +146,26 @@ const transcribeFile = async (inputFilePath) => {
     global.lastTranscriptionCost = costInfo.estimatedCost;
     global.lastTranscriptionDuration = result.metadata.duration;
     
-    // Log detailed metadata for debugging/cost analysis
-    logger.log(`Metadata: ${JSON.stringify({
-      duration: result.metadata.duration,
-      channels: result.metadata.channels,
-      model: result.metadata.model_info,
-      request_id: result.metadata.request_id,
-      cost: {
-        model: costInfo.model,
-        pricePerMinute: `$${costInfo.pricePerMinute.toFixed(4)}`,
-        durationInMinutes: costInfo.durationInMinutes.toFixed(2),
-        estimatedCost: `$${costInfo.estimatedCost.toFixed(4)}`
-      }
-    }, null, 2)}`);
+    // Log key metadata in a more readable format
+    logger.log(`File: ${inputFilePath}`);
+    logger.log(`Duration: ${result.metadata.duration.toFixed(2)} seconds (${(result.metadata.duration / 60).toFixed(2)} minutes)`);
+    logger.log(`Model: ${costInfo.model}`);
+    logger.log(`Cost: $${costInfo.estimatedCost.toFixed(4)} ($${costInfo.pricePerMinute.toFixed(4)}/minute)`);
     
-    // STEP 5: Print the transcript to console
-    logger.log("\nTranscript:");
-    logger.log(paragraphText);
+    // Include full metadata in debug logs
+    if (process.env.DEBUG_LOGS === 'true') {
+      logger.log(`Full Metadata: ${JSON.stringify({
+        duration: result.metadata.duration,
+        channels: result.metadata.channels,
+        model: result.metadata.model_info,
+        request_id: result.metadata.request_id
+      }, null, 2)}`);
+    }
     
-    // STEP 6: Write the transcript to a file
+    // STEP 6: Write the transcript to a file without printing it
     const outputPath = `${inputFilePath}.txt`;
     fs.writeFileSync(outputPath, paragraphText);
-    logger.log(`\nTranscript saved to: ${outputPath}`);
+    logger.log(`Transcript saved to: ${outputPath} (${paragraphText.length} characters)`);
     
     return true;
   } catch (err) {
