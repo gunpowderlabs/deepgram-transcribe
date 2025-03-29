@@ -7,6 +7,20 @@ const path = require("path");
 const glob = require("glob");
 const util = require('util');
 
+// Deepgram pricing information (as of March 2025)
+// You may need to update these prices if they change
+const PRICING = {
+  // Standard models
+  'nova-2': 0.0043, // per minute
+  'nova-2-whisper': 0.0059, // per minute
+  'enhanced': 0.015, // per minute
+  'whisper': 0.0209, // per minute
+  
+  // Premium models
+  'nova-3': 0.0069, // per minute
+  'nova-3-whisper': 0.0097, // per minute
+};
+
 // Create logs directory if it doesn't exist
 const LOGS_DIR = path.join(__dirname, 'logs');
 if (!fs.existsSync(LOGS_DIR)) {
@@ -84,6 +98,68 @@ const transcribeFile = async (inputFilePath) => {
     logger.log(`Transcription complete for ${inputFilePath}`);
     logger.log(`Duration: ${result.metadata.duration} seconds`);
     
+    // Calculate the cost of the transcription
+    const calculateCost = (durationInSeconds, modelInfo) => {
+      // Extract the model name from the metadata
+      let modelName = null;
+      
+      // Try to find the model name from the metadata
+      if (modelInfo) {
+        // Get the first model key
+        const modelKey = Object.keys(modelInfo)[0];
+        if (modelKey && modelInfo[modelKey]) {
+          // Extract the model name from arch or name property
+          const modelData = modelInfo[modelKey];
+          modelName = modelData.arch || modelData.name;
+          
+          // For models like "general-nova-3", extract just "nova-3"
+          if (modelName && modelName.includes('nova')) {
+            if (modelName.includes('nova-2')) modelName = 'nova-2';
+            else if (modelName.includes('nova-3')) modelName = 'nova-3';
+          }
+        }
+      }
+      
+      // Get the price per minute for the model
+      const pricePerMinute = modelName && PRICING[modelName] 
+        ? PRICING[modelName] 
+        : PRICING['nova-3']; // Default to nova-3 if model not found
+      
+      // Convert seconds to minutes
+      const durationInMinutes = durationInSeconds / 60;
+      
+      // Calculate the cost
+      const cost = durationInMinutes * pricePerMinute;
+      
+      return {
+        model: modelName || 'unknown',
+        pricePerMinute,
+        durationInMinutes,
+        estimatedCost: cost
+      };
+    };
+    
+    // Calculate and log the cost
+    const costInfo = calculateCost(result.metadata.duration, result.metadata.model_info);
+    
+    // Store cost info in global for batch processing summary
+    global.lastTranscriptionCost = costInfo.estimatedCost;
+    global.lastTranscriptionDuration = result.metadata.duration;
+    
+    // Log detailed metadata for debugging/cost analysis
+    logger.log(`Metadata: ${JSON.stringify({
+      duration: result.metadata.duration,
+      channels: result.metadata.channels,
+      model: result.metadata.model_info,
+      request_id: result.metadata.request_id,
+      cost: {
+        model: costInfo.model,
+        pricePerMinute: `$${costInfo.pricePerMinute.toFixed(4)}`,
+        durationInMinutes: costInfo.durationInMinutes.toFixed(2),
+        estimatedCost: `$${costInfo.estimatedCost.toFixed(4)}`
+      }
+    }, null, 2)}`);
+    
     // STEP 5: Print the transcript to console
     logger.log("\nTranscript:");
     logger.log(paragraphText);
@@ -141,15 +217,57 @@ const processFiles = async () => {
   
   // Process each file
   let successCount = 0;
+  let totalCost = 0;
+  let totalDuration = 0;
   const startTime = Date.now();
+  const fileResults = [];
   
   for (const file of filesToProcess) {
-    const success = await transcribeFile(file);
-    if (success) successCount++;
+    try {
+      // Add a hook to capture the cost from the transcription process
+      global.lastTranscriptionCost = null;
+      global.lastTranscriptionDuration = null;
+      
+      const success = await transcribeFile(file);
+      
+      if (success) {
+        successCount++;
+        
+        // Collect cost information if available
+        if (global.lastTranscriptionCost) {
+          totalCost += global.lastTranscriptionCost;
+          fileResults.push({
+            file,
+            cost: global.lastTranscriptionCost,
+            duration: global.lastTranscriptionDuration
+          });
+          
+          if (global.lastTranscriptionDuration) {
+            totalDuration += global.lastTranscriptionDuration;
+          }
+        }
+      }
+    } catch (err) {
+      logger.error(`Unexpected error processing ${file}: ${err}`);
+    }
   }
   
-  const duration = (Date.now() - startTime) / 1000;
-  logger.log(`\nCompleted processing ${successCount} of ${filesToProcess.length} files in ${duration.toFixed(2)} seconds`);
+  const processingDuration = (Date.now() - startTime) / 1000;
+  
+  // Log processing summary with costs
+  logger.log(`\n===== Transcription Summary =====`);
+  logger.log(`Files processed: ${successCount} of ${filesToProcess.length}`);
+  logger.log(`Total audio duration: ${(totalDuration / 60).toFixed(2)} minutes`);
+  logger.log(`Total processing time: ${processingDuration.toFixed(2)} seconds`);
+  logger.log(`Total estimated cost: $${totalCost.toFixed(4)}`);
+  
+  // Log individual file costs
+  if (fileResults.length > 0) {
+    logger.log(`\n===== File Cost Breakdown =====`);
+    fileResults.forEach(result => {
+      logger.log(`${result.file}: $${result.cost.toFixed(4)} (${(result.duration / 60).toFixed(2)} minutes)`);
+    });
+  }
   
   // Close the log stream
   logStream.end();
