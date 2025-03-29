@@ -1,5 +1,14 @@
 #!/usr/bin/env node
 
+// Suppress the punycode deprecation warning
+process.emitWarning = (warning, ...args) => {
+  if (typeof warning === 'string' && warning.includes('punycode')) {
+    return;
+  }
+  return process._originalEmitWarning(warning, ...args);
+};
+process._originalEmitWarning = process.emitWarning;
+
 import 'dotenv/config';
 import { createClient } from '@deepgram/sdk';
 import fs from 'fs';
