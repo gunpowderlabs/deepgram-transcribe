@@ -206,7 +206,7 @@ const calculateCost = (durationInSeconds, modelInfo) => {
   };
 };
 
-const transcribeFile = async (inputFilePath) => {
+const transcribeFile = async (inputFilePath, options = {}) => {
   // Set status for UI updates
   cliStatus.isProcessing = true;
   cliStatus.currentFile = path.basename(inputFilePath);
@@ -264,14 +264,22 @@ const transcribeFile = async (inputFilePath) => {
     // Update spinner with file size info
     spinner.text = `Sending ${fileSizeMB} MB to Deepgram API: ${cliStatus.currentFile}`;
     
+    // Configure the Deepgram options
+    const deepgramOptions = {
+      model: "nova-3",
+      smart_format: true,
+    };
+    
+    // Add speaker diarization if requested
+    if (options.speakers) {
+      deepgramOptions.diarize = true;
+      spinner.text = `Sending ${fileSizeMB} MB to Deepgram API with speaker recognition: ${cliStatus.currentFile}`;
+    }
+    
     // STEP 2: Call the transcribeFile method with the audio payload and options
     const { result, error } = await deepgram.listen.prerecorded.transcribeFile(
       fileBuffer,
-      // STEP 3: Configure Deepgram options for audio analysis
-      {
-        model: "nova-3",
-        smart_format: true,
-      }
+      deepgramOptions
     );
 
     if (error) throw error;
@@ -281,13 +289,54 @@ const transcribeFile = async (inputFilePath) => {
     
     // Get paragraphs if available
     const paragraphs = result.results.channels[0].alternatives[0].paragraphs?.paragraphs || [];
-    const paragraphText = paragraphs.length > 0 
-      ? paragraphs.map(p => {
-          // Join all sentences in the paragraph
-          const sentences = p.sentences.map(s => s.text).join(' ');
-          return sentences;
-        }).join('\n\n')
-      : transcript;
+    
+    // Format the transcript based on whether speaker recognition is enabled
+    let formattedText;
+    
+    if (options.speakers && result.results.channels[0].alternatives[0].words) {
+      // Get words with speaker information
+      const words = result.results.channels[0].alternatives[0].words;
+      
+      // Group words by speaker
+      const speakerSegments = [];
+      let currentSpeaker = null;
+      let currentText = '';
+      
+      for (const word of words) {
+        // If this is a new speaker or first word
+        if (currentSpeaker !== word.speaker) {
+          // Add the previous segment if it exists
+          if (currentText) {
+            speakerSegments.push({ speaker: currentSpeaker, text: currentText.trim() });
+          }
+          // Start a new segment
+          currentSpeaker = word.speaker;
+          currentText = word.word;
+        } else {
+          // Continue current segment
+          currentText += ' ' + word.word;
+        }
+      }
+      
+      // Add the last segment
+      if (currentText) {
+        speakerSegments.push({ speaker: currentSpeaker, text: currentText.trim() });
+      }
+      
+      // Format the speaker segments
+      formattedText = speakerSegments.map(segment => 
+        `Speaker ${segment.speaker}: ${segment.text}`
+      ).join('\n\n');
+    } else {
+      // Use paragraph formatting if available, or plain transcript if not
+      formattedText = paragraphs.length > 0 
+        ? paragraphs.map(p => {
+            // Join all sentences in the paragraph
+            const sentences = p.sentences.map(s => s.text).join(' ');
+            return sentences;
+          }).join('\n\n')
+        : transcript;
+    }
 
     // Calculate the cost
     const costInfo = calculateCost(result.metadata.duration, result.metadata.model_info);
@@ -300,25 +349,30 @@ const transcribeFile = async (inputFilePath) => {
       duration: result.metadata.duration,
       model: costInfo.model,
       fileSize: fileSizeMB,
-      charactersGenerated: paragraphText.length
+      charactersGenerated: formattedText.length,
+      speakers: options.speakers
     });
     cliStatus.totalCost += costInfo.estimatedCost;
     cliStatus.filesProcessed++;
     
     // STEP 5: Write the transcript to a file without printing it
-    fs.writeFileSync(outputPath, paragraphText);
+    fs.writeFileSync(outputPath, formattedText);
+    
+    // Create a success message that indicates if speaker recognition was used
+    const speakerInfo = options.speakers ? ' with speaker recognition' : '';
     
     // Update spinner with success message
-    spinner.succeed(chalk.green(`Processed: ${cliStatus.currentFile} (${(result.metadata.duration / 60).toFixed(2)} min, $${costInfo.estimatedCost.toFixed(4)})`));
+    spinner.succeed(chalk.green(`Processed${speakerInfo}: ${cliStatus.currentFile} (${(result.metadata.duration / 60).toFixed(2)} min, $${costInfo.estimatedCost.toFixed(4)})`));
     cliStatus.isProcessing = false;
     
     // Log detailed info to file
     logger.fileLog(`Transcription complete for ${inputFilePath}`);
     logger.fileLog(`Duration: ${result.metadata.duration.toFixed(2)} seconds (${(result.metadata.duration / 60).toFixed(2)} minutes)`);
     logger.fileLog(`Model: ${costInfo.model}`);
+    logger.fileLog(`Speaker Recognition: ${options.speakers ? 'Enabled' : 'Disabled'}`);
     logger.fileLog(`Cost: $${costInfo.estimatedCost.toFixed(4)} ($${costInfo.pricePerMinute.toFixed(4)}/minute)`);
     logger.fileLog(`File size: ${fileSizeMB} MB`);
-    logger.fileLog(`Transcript saved to: ${outputPath} (${paragraphText.length} characters)`);
+    logger.fileLog(`Transcript saved to: ${outputPath} (${formattedText.length} characters)`);
     
     // Include full metadata in debug logs
     if (process.env.DEBUG_LOGS === 'true') {
@@ -326,7 +380,8 @@ const transcribeFile = async (inputFilePath) => {
         duration: result.metadata.duration,
         channels: result.metadata.channels,
         model: result.metadata.model_info,
-        request_id: result.metadata.request_id
+        request_id: result.metadata.request_id,
+        diarize: options.speakers
       }, null, 2)}`);
     }
     
@@ -352,22 +407,42 @@ const processFiles = async () => {
   logger.info(`Deepgram Transcription Started`);
   logger.fileLog(`Logging to file: ${LOG_FILE}`);
   
-  // Get input patterns from command line arguments
-  const filePatterns = process.argv.slice(2);
+  // Parse command line arguments
+  const args = process.argv.slice(2);
+  const options = {
+    speakers: false,
+    filePatterns: []
+  };
   
-  if (filePatterns.length === 0) {
+  // Process arguments
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--speakers') {
+      options.speakers = true;
+    } else {
+      options.filePatterns.push(args[i]);
+    }
+  }
+  
+  if (options.filePatterns.length === 0) {
     logger.error("Please provide at least one file path or pattern as an argument");
-    console.log('\n' + chalk.yellow('Usage: node transcribe.js "*.mp3"'));
+    console.log('\n' + chalk.yellow('Usage: node transcribe.js [options] "*.mp3"'));
+    console.log(chalk.yellow('Options:'));
+    console.log(chalk.yellow('  --speakers    Enable speaker recognition (diarization)'));
     process.exit(1);
   }
 
-  logger.info(`Processing patterns: ${filePatterns.join(', ')}`);
+  // Log options being used
+  if (options.speakers) {
+    logger.info('Speaker recognition (diarization) enabled');
+  }
+  
+  logger.info(`Processing patterns: ${options.filePatterns.join(', ')}`);
 
   // Expand all glob patterns into file paths
   spinner.start('Finding files to process...');
   let filesToProcess = [];
   
-  for (const pattern of filePatterns) {
+  for (const pattern of options.filePatterns) {
     // If it's a direct file path that exists, add it
     if (fs.existsSync(pattern) && fs.statSync(pattern).isFile()) {
       filesToProcess.push(pattern);
@@ -399,7 +474,7 @@ const processFiles = async () => {
   // Process files in sequence
   for (const file of filesToProcess) {
     try {
-      await transcribeFile(file);
+      await transcribeFile(file, options);
     } catch (err) {
       logger.error(`Unexpected error processing ${file}: ${err}`);
     }
@@ -446,10 +521,11 @@ const processFiles = async () => {
         chalk.blue.bold('Duration (min)'), 
         chalk.blue.bold('Cost'), 
         chalk.blue.bold('Size (MB)'),
-        chalk.blue.bold('Model')
+        chalk.blue.bold('Model'),
+        chalk.blue.bold('Speakers')
       ],
       style: { head: [], border: [] },
-      colWidths: [30, 10, 15, 15, 12, 15]
+      colWidths: [30, 10, 15, 15, 12, 10, 10]
     });
     
     // Sort by cost (most expensive first)
@@ -460,6 +536,7 @@ const processFiles = async () => {
       const status = result.skipped ? chalk.cyan('Skipped') : chalk.green('Processed');
       const duration = result.skipped ? '-' : chalk.yellow((result.duration / 60).toFixed(2));
       const cost = result.skipped ? '$0.0000' : chalk.green('$' + result.cost.toFixed(4));
+      const speakers = result.skipped ? '-' : (result.speakers ? chalk.green('Yes') : chalk.yellow('No'));
       
       fileTable.push([
         chalk.white(result.filename),
@@ -467,7 +544,8 @@ const processFiles = async () => {
         duration,
         cost,
         chalk.cyan(result.fileSize),
-        chalk.magenta(result.model)
+        chalk.magenta(result.model),
+        speakers
       ]);
     });
     
