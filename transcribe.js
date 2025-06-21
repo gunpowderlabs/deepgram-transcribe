@@ -364,6 +364,12 @@ const transcribeFile = async (inputFilePath, options = {}) => {
     
     // Update spinner with success message
     spinner.succeed(chalk.green(`Processed${speakerInfo}: ${cliStatus.currentFile} (${(result.metadata.duration / 60).toFixed(2)} min, $${costInfo.estimatedCost.toFixed(4)})`));
+    
+    // If speakers flag is set, inform user to run assign-speakers tool
+    if (options.speakers) {
+      console.log(chalk.yellow(`  → To assign speaker names, run: assign-speakers "${outputPath}"`));
+      logger.fileLog(`Speaker diarization complete. Run 'assign-speakers "${outputPath}"' to assign speaker names.`);
+    }
     cliStatus.isProcessing = false;
     
     // Log detailed info to file
