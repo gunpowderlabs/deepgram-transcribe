@@ -212,7 +212,8 @@ const transcribeFile = async (inputFilePath, options = {}) => {
   cliStatus.currentFile = path.basename(inputFilePath);
   
   // Check if transcript already exists
-  const outputPath = `${inputFilePath}.txt`;
+  // Create output path by replacing the original extension with .txt
+  const outputPath = `${inputFilePath.replace(/\.[^/.]+$/, '')}.txt`;
   if (fs.existsSync(outputPath)) {
     // Skip file if transcript already exists
     spinner.info(chalk.cyan(`Skipped: ${cliStatus.currentFile} (transcript already exists)`));
