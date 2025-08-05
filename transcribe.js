@@ -269,6 +269,7 @@ const transcribeFile = async (inputFilePath, options = {}) => {
     const deepgramOptions = {
       model: "nova-3",
       smart_format: true,
+      punctuate: true,
     };
     
     // Add speaker diarization if requested
@@ -298,36 +299,58 @@ const transcribeFile = async (inputFilePath, options = {}) => {
       // Get words with speaker information
       const words = result.results.channels[0].alternatives[0].words;
       
-      // Group words by speaker
-      const speakerSegments = [];
-      let currentSpeaker = null;
-      let currentText = '';
-      
-      for (const word of words) {
-        // If this is a new speaker or first word
-        if (currentSpeaker !== word.speaker) {
-          // Add the previous segment if it exists
-          if (currentText) {
-            speakerSegments.push({ speaker: currentSpeaker, text: currentText.trim() });
+      // If paragraphs are available, use them for formatting while adding speaker labels
+      if (paragraphs.length > 0) {
+        formattedText = paragraphs.map(p => {
+          // Find the speaker for this paragraph by checking the first word
+          const firstWordInParagraph = p.sentences[0].text.split(' ')[0].toLowerCase();
+          const paragraphStartTime = p.start;
+          
+          // Find the speaker at this timestamp
+          let speaker = 0;
+          for (const word of words) {
+            if (Math.abs(word.start - paragraphStartTime) < 0.1) {
+              speaker = word.speaker;
+              break;
+            }
           }
-          // Start a new segment
-          currentSpeaker = word.speaker;
-          currentText = word.word;
-        } else {
-          // Continue current segment
-          currentText += ' ' + word.word;
+          
+          // Join all sentences in the paragraph
+          const sentences = p.sentences.map(s => s.text).join(' ');
+          return `Speaker ${speaker}: ${sentences}`;
+        }).join('\n\n');
+      } else {
+        // Fallback to word-by-word grouping if no paragraphs available
+        const speakerSegments = [];
+        let currentSpeaker = null;
+        let currentText = '';
+        
+        for (const word of words) {
+          // If this is a new speaker or first word
+          if (currentSpeaker !== word.speaker) {
+            // Add the previous segment if it exists
+            if (currentText) {
+              speakerSegments.push({ speaker: currentSpeaker, text: currentText.trim() });
+            }
+            // Start a new segment
+            currentSpeaker = word.speaker;
+            currentText = word.word;
+          } else {
+            // Continue current segment
+            currentText += ' ' + word.word;
+          }
         }
+        
+        // Add the last segment
+        if (currentText) {
+          speakerSegments.push({ speaker: currentSpeaker, text: currentText.trim() });
+        }
+        
+        // Format the speaker segments
+        formattedText = speakerSegments.map(segment => 
+          `Speaker ${segment.speaker}: ${segment.text}`
+        ).join('\n\n');
       }
-      
-      // Add the last segment
-      if (currentText) {
-        speakerSegments.push({ speaker: currentSpeaker, text: currentText.trim() });
-      }
-      
-      // Format the speaker segments
-      formattedText = speakerSegments.map(segment => 
-        `Speaker ${segment.speaker}: ${segment.text}`
-      ).join('\n\n');
     } else {
       // Use paragraph formatting if available, or plain transcript if not
       formattedText = paragraphs.length > 0 
