@@ -22,7 +22,7 @@ A command-line tool for batch transcribing audio files using the Deepgram API.
 
 2. Install dependencies:
    ```bash
-   npm install
+   bun install
    ```
 
 3. Create a `.env` file with your Deepgram API key:
@@ -32,7 +32,7 @@ A command-line tool for batch transcribing audio files using the Deepgram API.
 
 4. Optionally, install globally:
    ```bash
-   npm install -g .
+   bun link
    ```
 
 ## Usage
@@ -41,24 +41,24 @@ A command-line tool for batch transcribing audio files using the Deepgram API.
 
 Transcribe a single file:
 ```bash
-node transcribe.js path/to/audio.mp3
+bun transcribe.js path/to/audio.mp3
 ```
 
 Transcribe using glob patterns:
 ```bash
-node transcribe.js "recordings/*.mp3"
+bun transcribe.js "recordings/*.mp3"
 ```
 
 Transcribe multiple patterns:
 ```bash
-node transcribe.js "folder1/*.mp3" "folder2/*.wav"
+bun transcribe.js "folder1/*.mp3" "folder2/*.wav"
 ```
 
 ### Speaker Recognition
 
 Enable speaker recognition (diarization) to identify different speakers in the audio:
 ```bash
-node transcribe.js --speakers "recordings/meeting.mp3"
+bun transcribe.js --speakers "recordings/meeting.mp3"
 ```
 
 This will format the transcript with "Speaker 0:", "Speaker 1:", etc. prefixes.

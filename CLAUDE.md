@@ -1,15 +1,15 @@
 # Deepgram Project Guidelines
 
 ## Build Commands
-- Install dependencies: `npm install`
-- Run the transcription example: `node transcribe.js`
+- Install dependencies: `bun install`
+- Run the transcription example: `bun transcribe.js`
 
 ## Development Commands
-- Lint: `npm run lint` - Runs all linting
-- Format: `npm run format` - Formats code with Prettier
-- Build: `npm run build` - Builds all distribution formats
-- Test: `npm run test` - Runs all tests
-- Single test: `npm run test -- -g "test name"` - Runs specific test
+- Lint: `bun run lint` - Runs all linting
+- Format: `bun run format` - Formats code with Prettier
+- Build: `bun run build` - Builds all distribution formats
+- Test: `bun test` - Runs all tests
+- Single test: `bun test -t "test name"` - Runs specific test
 
 ## Code Style
 - **TypeScript**: Use strong typing throughout
