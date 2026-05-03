@@ -20,24 +20,16 @@ import chalk from 'chalk';
 import ora from 'ora';
 import Table from 'cli-table3';
 import cliProgress from 'cli-progress';
+import {
+  calculateCost,
+  deriveOutputPath,
+  formatTranscript,
+  parseArgs,
+} from './lib.js';
 
 // Get the directory name
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-// Deepgram pricing information (as of March 2025)
-// You may need to update these prices if they change
-const PRICING = {
-  // Standard models
-  'nova-2': 0.0043, // per minute
-  'nova-2-whisper': 0.0059, // per minute
-  'enhanced': 0.015, // per minute
-  'whisper': 0.0209, // per minute
-  
-  // Premium models
-  'nova-3': 0.0069, // per minute
-  'nova-3-whisper': 0.0097, // per minute
-};
 
 // Create logs directory if it doesn't exist
 const LOGS_DIR = path.join(__dirname, 'logs');
@@ -165,55 +157,13 @@ const logger = {
   }
 };
 
-// Helper function to calculate cost
-const calculateCost = (durationInSeconds, modelInfo) => {
-  // Extract the model name from the metadata
-  let modelName = null;
-  
-  // Try to find the model name from the metadata
-  if (modelInfo) {
-    // Get the first model key
-    const modelKey = Object.keys(modelInfo)[0];
-    if (modelKey && modelInfo[modelKey]) {
-      // Extract the model name from arch or name property
-      const modelData = modelInfo[modelKey];
-      modelName = modelData.arch || modelData.name;
-      
-      // For models like "general-nova-3", extract just "nova-3"
-      if (modelName && modelName.includes('nova')) {
-        if (modelName.includes('nova-2')) modelName = 'nova-2';
-        else if (modelName.includes('nova-3')) modelName = 'nova-3';
-      }
-    }
-  }
-  
-  // Get the price per minute for the model
-  const pricePerMinute = modelName && PRICING[modelName] 
-    ? PRICING[modelName] 
-    : PRICING['nova-3']; // Default to nova-3 if model not found
-  
-  // Convert seconds to minutes
-  const durationInMinutes = durationInSeconds / 60;
-  
-  // Calculate the cost
-  const cost = durationInMinutes * pricePerMinute;
-  
-  return {
-    model: modelName || 'unknown',
-    pricePerMinute,
-    durationInMinutes,
-    estimatedCost: cost
-  };
-};
-
 const transcribeFile = async (inputFilePath, options = {}) => {
   // Set status for UI updates
   cliStatus.isProcessing = true;
   cliStatus.currentFile = path.basename(inputFilePath);
-  
+
   // Check if transcript already exists
-  // Create output path by replacing the original extension with .txt
-  const outputPath = `${inputFilePath.replace(/\.[^/.]+$/, '')}.txt`;
+  const outputPath = deriveOutputPath(inputFilePath);
   if (fs.existsSync(outputPath)) {
     // Skip file if transcript already exists
     spinner.info(chalk.cyan(`Skipped: ${cliStatus.currentFile} (transcript already exists)`));
@@ -287,80 +237,17 @@ const transcribeFile = async (inputFilePath, options = {}) => {
     if (error) throw error;
 
     // STEP 4: Extract the transcript
-    const transcript = result.results.channels[0].alternatives[0].transcript;
-    
-    // Get paragraphs if available
-    const paragraphs = result.results.channels[0].alternatives[0].paragraphs?.paragraphs || [];
-    
-    // Format the transcript based on whether speaker recognition is enabled
-    let formattedText;
-    
-    if (options.speakers && result.results.channels[0].alternatives[0].words) {
-      // Get words with speaker information
-      const words = result.results.channels[0].alternatives[0].words;
-      
-      // If paragraphs are available, use them for formatting while adding speaker labels
-      if (paragraphs.length > 0) {
-        formattedText = paragraphs.map(p => {
-          // Find the speaker for this paragraph by checking the first word
-          const firstWordInParagraph = p.sentences[0].text.split(' ')[0].toLowerCase();
-          const paragraphStartTime = p.start;
-          
-          // Find the speaker at this timestamp
-          let speaker = 0;
-          for (const word of words) {
-            if (Math.abs(word.start - paragraphStartTime) < 0.1) {
-              speaker = word.speaker;
-              break;
-            }
-          }
-          
-          // Join all sentences in the paragraph
-          const sentences = p.sentences.map(s => s.text).join(' ');
-          return `Speaker ${speaker}: ${sentences}`;
-        }).join('\n\n');
-      } else {
-        // Fallback to word-by-word grouping if no paragraphs available
-        const speakerSegments = [];
-        let currentSpeaker = null;
-        let currentText = '';
-        
-        for (const word of words) {
-          // If this is a new speaker or first word
-          if (currentSpeaker !== word.speaker) {
-            // Add the previous segment if it exists
-            if (currentText) {
-              speakerSegments.push({ speaker: currentSpeaker, text: currentText.trim() });
-            }
-            // Start a new segment
-            currentSpeaker = word.speaker;
-            currentText = word.word;
-          } else {
-            // Continue current segment
-            currentText += ' ' + word.word;
-          }
-        }
-        
-        // Add the last segment
-        if (currentText) {
-          speakerSegments.push({ speaker: currentSpeaker, text: currentText.trim() });
-        }
-        
-        // Format the speaker segments
-        formattedText = speakerSegments.map(segment => 
-          `Speaker ${segment.speaker}: ${segment.text}`
-        ).join('\n\n');
-      }
-    } else {
-      // Use paragraph formatting if available, or plain transcript if not
-      formattedText = paragraphs.length > 0 
-        ? paragraphs.map(p => {
-            // Join all sentences in the paragraph
-            const sentences = p.sentences.map(s => s.text).join(' ');
-            return sentences;
-          }).join('\n\n')
-        : transcript;
-    }
+    const alternative = result.results.channels[0].alternatives[0];
+    const transcript = alternative.transcript;
+    const paragraphs = alternative.paragraphs?.paragraphs || [];
+    const words = alternative.words || [];
+
+    const formattedText = formatTranscript({
+      transcript,
+      paragraphs,
+      words,
+      speakers: options.speakers,
+    });
 
     // Calculate the cost
     const costInfo = calculateCost(result.metadata.duration, result.metadata.model_info);
@@ -438,21 +325,8 @@ const processFiles = async () => {
   logger.fileLog(`Logging to file: ${LOG_FILE}`);
   
   // Parse command line arguments
-  const args = process.argv.slice(2);
-  const options = {
-    speakers: false,
-    filePatterns: []
-  };
-  
-  // Process arguments
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--speakers') {
-      options.speakers = true;
-    } else {
-      options.filePatterns.push(args[i]);
-    }
-  }
-  
+  const options = parseArgs(process.argv.slice(2));
+
   if (options.filePatterns.length === 0) {
     logger.error("Please provide at least one file path or pattern as an argument");
     console.log('\n' + chalk.yellow('Usage: node transcribe.js [options] "*.mp3"'));

@@ -5,6 +5,9 @@
   "bin": {
     "transcribe": "./transcribe.js"
   },
+  "scripts": {
+    "test": "bun test"
+  },
   "dependencies": {
     "@deepgram/sdk": "^3.11.3",
     "chalk": "^5.4.1",
