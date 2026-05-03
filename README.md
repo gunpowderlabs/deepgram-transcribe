@@ -16,8 +16,8 @@ A command-line tool for batch transcribing audio files using the Deepgram API.
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/yourusername/deepgram-transcribe.git
-   cd deepgram-transcribe
+   git clone https://github.com/yourusername/transcribe.git
+   cd transcribe
    ```
 
 2. Install dependencies:
@@ -66,7 +66,7 @@ This will format the transcript with "Speaker 0:", "Speaker 1:", etc. prefixes.
 ### If Installed Globally
 
 ```bash
-deepgram-transcribe "*.mp3"
+transcribe "*.mp3"
 ```
 
 ## Output

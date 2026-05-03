@@ -1,9 +1,9 @@
 {
-  "name": "deepgram-transcribe",
+  "name": "transcribe",
   "version": "1.0.0",
   "type": "module",
   "bin": {
-    "deepgram-transcribe": "./transcribe.js"
+    "transcribe": "./transcribe.js"
   },
   "dependencies": {
     "@deepgram/sdk": "^3.11.3",
