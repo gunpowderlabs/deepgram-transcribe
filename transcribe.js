@@ -9,7 +9,6 @@ process.emitWarning = (warning, ...args) => {
 };
 process._originalEmitWarning = process.emitWarning;
 
-import 'dotenv/config';
 import { createClient } from '@deepgram/sdk';
 import fs from 'fs';
 import path from 'path';
@@ -26,12 +25,14 @@ import {
   deriveOutputPath,
   DEFAULT_DIARIZE_MODEL,
   formatTranscript,
+  loadCliEnv,
   parseArgs,
 } from './lib.js';
 
 // Get the directory name
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+loadCliEnv(__dirname);
 const PACKAGE_JSON = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
 const VERSION = PACKAGE_JSON.version;
 

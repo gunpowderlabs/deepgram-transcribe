@@ -1,4 +1,7 @@
 import { describe, test, expect } from 'bun:test';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import {
   PRICING,
   DEFAULT_MODEL,
@@ -8,6 +11,7 @@ import {
   deriveOutputPath,
   calculateCost,
   formatTranscript,
+  loadCliEnv,
 } from '../lib.js';
 
 describe('parseArgs', () => {
@@ -244,6 +248,40 @@ describe('buildDeepgramOptions', () => {
 
   test('does not send the deprecated boolean diarize parameter', () => {
     expect(buildDeepgramOptions({ speakers: true })).not.toHaveProperty('diarize');
+  });
+});
+
+describe('loadCliEnv', () => {
+  test('loads .env from the CLI directory instead of the invocation cwd', () => {
+    const envKey = 'TRANSCRIBE_TEST_LOCAL_ENV';
+    const originalCwd = process.cwd();
+    const originalEnvValue = process.env[envKey];
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'transcribe-env-test-'));
+    const cliDir = path.join(tmpDir, 'cli');
+    const invocationDir = path.join(tmpDir, 'invocation');
+
+    fs.mkdirSync(cliDir);
+    fs.mkdirSync(invocationDir);
+    fs.writeFileSync(path.join(cliDir, '.env'), `${envKey}=from-cli\n`);
+    fs.writeFileSync(path.join(invocationDir, '.env'), `${envKey}=from-cwd\n`);
+
+    try {
+      delete process.env[envKey];
+      process.chdir(invocationDir);
+
+      const result = loadCliEnv(cliDir);
+
+      expect(result.parsed).toEqual({ [envKey]: 'from-cli' });
+      expect(process.env[envKey]).toBe('from-cli');
+    } finally {
+      process.chdir(originalCwd);
+      if (originalEnvValue === undefined) {
+        delete process.env[envKey];
+      } else {
+        process.env[envKey] = originalEnvValue;
+      }
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -1,3 +1,6 @@
+import { config as loadEnv } from 'dotenv';
+import path from 'path';
+
 // Deepgram pricing information (as of March 2025)
 export const PRICING = {
   // Standard models
@@ -79,6 +82,10 @@ export function buildDeepgramOptions({ speakers = false } = {}) {
   }
 
   return options;
+}
+
+export function loadCliEnv(cliDirectory) {
+  return loadEnv({ path: path.join(cliDirectory, '.env') });
 }
 
 function findSpeakerForParagraph(paragraph, words) {
