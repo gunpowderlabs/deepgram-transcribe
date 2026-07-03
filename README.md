@@ -6,7 +6,7 @@ A command-line tool for batch transcribing audio files using the Deepgram API.
 
 - Transcribe individual files or batches using glob patterns
 - Smart formatting with paragraph segmentation
-- Speaker recognition with the `--speakers` flag
+- Speaker diarization with Deepgram's latest diarizer via the `--speakers` flag
 - Progress tracking and detailed logs
 - Cost estimation based on Deepgram's pricing
 - Summary statistics and file breakdown after processing
@@ -54,14 +54,14 @@ Transcribe multiple patterns:
 bun transcribe.js "folder1/*.mp3" "folder2/*.wav"
 ```
 
-### Speaker Recognition
+### Speaker Diarization
 
-Enable speaker recognition (diarization) to identify different speakers in the audio:
+Enable speaker diarization to identify different speakers in the audio:
 ```bash
 bun transcribe.js --speakers "recordings/meeting.mp3"
 ```
 
-This will format the transcript with "Speaker 0:", "Speaker 1:", etc. prefixes.
+This sends `diarize_model=latest` to Deepgram and formats the transcript with "Speaker 0:", "Speaker 1:", etc. prefixes.
 
 ### If Installed Globally
 

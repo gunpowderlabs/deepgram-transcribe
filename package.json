@@ -1,11 +1,12 @@
 {
   "name": "transcribe",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module",
   "bin": {
     "transcribe": "./transcribe.js"
   },
   "scripts": {
+    "ci": "bun test",
     "test": "bun test"
   },
   "dependencies": {

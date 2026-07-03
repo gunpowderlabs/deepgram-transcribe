@@ -2,6 +2,8 @@ import { describe, test, expect } from 'bun:test';
 import {
   PRICING,
   DEFAULT_MODEL,
+  DEFAULT_DIARIZE_MODEL,
+  buildDeepgramOptions,
   parseArgs,
   deriveOutputPath,
   calculateCost,
@@ -10,12 +12,13 @@ import {
 
 describe('parseArgs', () => {
   test('returns defaults for empty args', () => {
-    expect(parseArgs([])).toEqual({ speakers: false, filePatterns: [] });
+    expect(parseArgs([])).toEqual({ speakers: false, version: false, filePatterns: [] });
   });
 
   test('treats a single positional argument as a file pattern', () => {
     expect(parseArgs(['recording.mp3'])).toEqual({
       speakers: false,
+      version: false,
       filePatterns: ['recording.mp3'],
     });
   });
@@ -23,6 +26,7 @@ describe('parseArgs', () => {
   test('collects multiple positional arguments in order', () => {
     expect(parseArgs(['a.mp3', 'b.wav', 'c.m4a'])).toEqual({
       speakers: false,
+      version: false,
       filePatterns: ['a.mp3', 'b.wav', 'c.m4a'],
     });
   });
@@ -30,6 +34,7 @@ describe('parseArgs', () => {
   test('--speakers sets the speakers flag without consuming a positional', () => {
     expect(parseArgs(['--speakers', 'meeting.mp3'])).toEqual({
       speakers: true,
+      version: false,
       filePatterns: ['meeting.mp3'],
     });
   });
@@ -37,6 +42,7 @@ describe('parseArgs', () => {
   test('--speakers can appear in any position', () => {
     expect(parseArgs(['a.mp3', '--speakers', 'b.mp3'])).toEqual({
       speakers: true,
+      version: false,
       filePatterns: ['a.mp3', 'b.mp3'],
     });
   });
@@ -44,6 +50,15 @@ describe('parseArgs', () => {
   test('--speakers with no patterns leaves filePatterns empty', () => {
     expect(parseArgs(['--speakers'])).toEqual({
       speakers: true,
+      version: false,
+      filePatterns: [],
+    });
+  });
+
+  test('--version sets the version flag without consuming a positional', () => {
+    expect(parseArgs(['--version'])).toEqual({
+      speakers: false,
+      version: true,
       filePatterns: [],
     });
   });
@@ -51,6 +66,7 @@ describe('parseArgs', () => {
   test('preserves glob-like patterns verbatim', () => {
     expect(parseArgs(['recordings/*.mp3', 'folder/**/*.wav'])).toEqual({
       speakers: false,
+      version: false,
       filePatterns: ['recordings/*.mp3', 'folder/**/*.wav'],
     });
   });
@@ -58,6 +74,7 @@ describe('parseArgs', () => {
   test('unknown flags are passed through as patterns (current behavior)', () => {
     expect(parseArgs(['--unknown', 'a.mp3'])).toEqual({
       speakers: false,
+      version: false,
       filePatterns: ['--unknown', 'a.mp3'],
     });
   });
@@ -204,6 +221,29 @@ describe('calculateCost', () => {
     const result = calculateCost(60, { 'abc-123': null });
     expect(result.model).toBe('unknown');
     expect(result.pricePerMinute).toBe(PRICING[DEFAULT_MODEL]);
+  });
+});
+
+describe('buildDeepgramOptions', () => {
+  test('uses the default transcription options without diarization', () => {
+    expect(buildDeepgramOptions()).toEqual({
+      model: DEFAULT_MODEL,
+      smart_format: true,
+      punctuate: true,
+    });
+  });
+
+  test('uses the latest Deepgram diarizer when speakers are requested', () => {
+    expect(buildDeepgramOptions({ speakers: true })).toEqual({
+      model: DEFAULT_MODEL,
+      smart_format: true,
+      punctuate: true,
+      diarize_model: DEFAULT_DIARIZE_MODEL,
+    });
+  });
+
+  test('does not send the deprecated boolean diarize parameter', () => {
+    expect(buildDeepgramOptions({ speakers: true })).not.toHaveProperty('diarize');
   });
 });
 

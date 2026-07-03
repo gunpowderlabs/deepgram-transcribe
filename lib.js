@@ -12,15 +12,18 @@ export const PRICING = {
 };
 
 export const DEFAULT_MODEL = 'nova-3';
+export const DEFAULT_DIARIZE_MODEL = 'latest';
 
-const KNOWN_FLAGS = new Set(['--speakers']);
+const KNOWN_FLAGS = new Set(['--speakers', '--version']);
 
 export function parseArgs(args) {
-  const options = { speakers: false, filePatterns: [] };
+  const options = { speakers: false, version: false, filePatterns: [] };
 
   for (const arg of args) {
     if (arg === '--speakers') {
       options.speakers = true;
+    } else if (arg === '--version') {
+      options.version = true;
     } else {
       options.filePatterns.push(arg);
     }
@@ -62,6 +65,20 @@ export function calculateCost(durationInSeconds, modelInfo) {
     durationInMinutes,
     estimatedCost,
   };
+}
+
+export function buildDeepgramOptions({ speakers = false } = {}) {
+  const options = {
+    model: DEFAULT_MODEL,
+    smart_format: true,
+    punctuate: true,
+  };
+
+  if (speakers) {
+    options.diarize_model = DEFAULT_DIARIZE_MODEL;
+  }
+
+  return options;
 }
 
 function findSpeakerForParagraph(paragraph, words) {

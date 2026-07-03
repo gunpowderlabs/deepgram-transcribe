@@ -7,6 +7,9 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = path.join(__dirname, '..', 'transcribe.js');
+const PACKAGE_JSON = JSON.parse(
+  fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')
+);
 
 let tmpDir;
 
@@ -33,6 +36,13 @@ function runCli(args = [], { env = {} } = {}) {
 }
 
 describe('CLI argument handling', () => {
+  test('prints the package version for --version', () => {
+    const result = runCli(['--version']);
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe(PACKAGE_JSON.version);
+    expect(result.stderr).toBe('');
+  });
+
   test('exits with code 1 and prints usage when given no arguments', () => {
     const result = runCli([]);
     expect(result.status).toBe(1);
@@ -40,6 +50,7 @@ describe('CLI argument handling', () => {
     expect(out).toContain('Please provide at least one file path');
     expect(out).toContain('Usage:');
     expect(out).toContain('--speakers');
+    expect(out).toContain('--version');
   });
 
   test('exits with code 1 when only --speakers is provided', () => {

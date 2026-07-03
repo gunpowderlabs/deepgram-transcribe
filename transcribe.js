@@ -21,8 +21,10 @@ import ora from 'ora';
 import Table from 'cli-table3';
 import cliProgress from 'cli-progress';
 import {
+  buildDeepgramOptions,
   calculateCost,
   deriveOutputPath,
+  DEFAULT_DIARIZE_MODEL,
   formatTranscript,
   parseArgs,
 } from './lib.js';
@@ -30,6 +32,8 @@ import {
 // Get the directory name
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const PACKAGE_JSON = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
+const VERSION = PACKAGE_JSON.version;
 
 // Create logs directory if it doesn't exist
 const LOGS_DIR = path.join(__dirname, 'logs');
@@ -216,16 +220,11 @@ const transcribeFile = async (inputFilePath, options = {}) => {
     spinner.text = `Sending ${fileSizeMB} MB to Deepgram API: ${cliStatus.currentFile}`;
     
     // Configure the Deepgram options
-    const deepgramOptions = {
-      model: "nova-3",
-      smart_format: true,
-      punctuate: true,
-    };
+    const deepgramOptions = buildDeepgramOptions(options);
     
     // Add speaker diarization if requested
     if (options.speakers) {
-      deepgramOptions.diarize = true;
-      spinner.text = `Sending ${fileSizeMB} MB to Deepgram API with speaker recognition: ${cliStatus.currentFile}`;
+      spinner.text = `Sending ${fileSizeMB} MB to Deepgram API with ${DEFAULT_DIARIZE_MODEL} speaker diarization: ${cliStatus.currentFile}`;
     }
     
     // STEP 2: Call the transcribeFile method with the audio payload and options
@@ -269,8 +268,8 @@ const transcribeFile = async (inputFilePath, options = {}) => {
     // STEP 5: Write the transcript to a file without printing it
     fs.writeFileSync(outputPath, formattedText);
     
-    // Create a success message that indicates if speaker recognition was used
-    const speakerInfo = options.speakers ? ' with speaker recognition' : '';
+    // Create a success message that indicates if speaker diarization was used
+    const speakerInfo = options.speakers ? ` with ${DEFAULT_DIARIZE_MODEL} speaker diarization` : '';
     
     // Update spinner with success message
     spinner.succeed(chalk.green(`Processed${speakerInfo}: ${cliStatus.currentFile} (${(result.metadata.duration / 60).toFixed(2)} min, $${costInfo.estimatedCost.toFixed(4)})`));
@@ -278,7 +277,7 @@ const transcribeFile = async (inputFilePath, options = {}) => {
     // If speakers flag is set, inform user to run assign-speakers tool
     if (options.speakers) {
       console.log(chalk.yellow(`  → To assign speaker names, run: assign-speakers "${outputPath}"`));
-      logger.fileLog(`Speaker diarization complete. Run 'assign-speakers "${outputPath}"' to assign speaker names.`);
+      logger.fileLog(`Speaker diarization (${DEFAULT_DIARIZE_MODEL}) complete. Run 'assign-speakers "${outputPath}"' to assign speaker names.`);
     }
     cliStatus.isProcessing = false;
     
@@ -286,7 +285,7 @@ const transcribeFile = async (inputFilePath, options = {}) => {
     logger.fileLog(`Transcription complete for ${inputFilePath}`);
     logger.fileLog(`Duration: ${result.metadata.duration.toFixed(2)} seconds (${(result.metadata.duration / 60).toFixed(2)} minutes)`);
     logger.fileLog(`Model: ${costInfo.model}`);
-    logger.fileLog(`Speaker Recognition: ${options.speakers ? 'Enabled' : 'Disabled'}`);
+    logger.fileLog(`Speaker Diarization: ${options.speakers ? `Enabled (${DEFAULT_DIARIZE_MODEL})` : 'Disabled'}`);
     logger.fileLog(`Cost: $${costInfo.estimatedCost.toFixed(4)} ($${costInfo.pricePerMinute.toFixed(4)}/minute)`);
     logger.fileLog(`File size: ${fileSizeMB} MB`);
     logger.fileLog(`Transcript saved to: ${outputPath} (${formattedText.length} characters)`);
@@ -298,7 +297,7 @@ const transcribeFile = async (inputFilePath, options = {}) => {
         channels: result.metadata.channels,
         model: result.metadata.model_info,
         request_id: result.metadata.request_id,
-        diarize: options.speakers
+        diarize_model: options.speakers ? DEFAULT_DIARIZE_MODEL : undefined
       }, null, 2)}`);
     }
     
@@ -313,6 +312,17 @@ const transcribeFile = async (inputFilePath, options = {}) => {
 
 // Main function to process files
 const processFiles = async () => {
+  // Parse command line arguments
+  const options = parseArgs(process.argv.slice(2));
+
+  if (options.version) {
+    console.log(VERSION);
+    logStream.end();
+    return;
+  }
+
+  ensureGitignore();
+
   // Clear the screen for a clean UI
   process.stdout.write('\x1Bc');
   
@@ -324,20 +334,18 @@ const processFiles = async () => {
   logger.info(`Deepgram Transcription Started`);
   logger.fileLog(`Logging to file: ${LOG_FILE}`);
   
-  // Parse command line arguments
-  const options = parseArgs(process.argv.slice(2));
-
   if (options.filePatterns.length === 0) {
     logger.error("Please provide at least one file path or pattern as an argument");
     console.log('\n' + chalk.yellow('Usage: node transcribe.js [options] "*.mp3"'));
     console.log(chalk.yellow('Options:'));
-    console.log(chalk.yellow('  --speakers    Enable speaker recognition (diarization)'));
+    console.log(chalk.yellow('  --speakers    Enable speaker diarization using Deepgram diarize_model=latest'));
+    console.log(chalk.yellow('  --version     Print the CLI version'));
     process.exit(1);
   }
 
   // Log options being used
   if (options.speakers) {
-    logger.info('Speaker recognition (diarization) enabled');
+    logger.info(`Speaker diarization enabled (${DEFAULT_DIARIZE_MODEL})`);
   }
   
   logger.info(`Processing patterns: ${options.filePatterns.join(', ')}`);
@@ -472,17 +480,19 @@ const processFiles = async () => {
   logStream.end();
 };
 
-// Create .gitignore if it doesn't exist
-const GITIGNORE_PATH = path.join(__dirname, '.gitignore');
-if (!fs.existsSync(GITIGNORE_PATH)) {
-  fs.writeFileSync(GITIGNORE_PATH, 'node_modules/\n.env\nlogs/\n');
-  console.log('Created .gitignore file');
-} else {
-  // Append logs/ to .gitignore if not already present
-  const gitignoreContent = fs.readFileSync(GITIGNORE_PATH, 'utf8');
-  if (!gitignoreContent.includes('logs/')) {
-    fs.appendFileSync(GITIGNORE_PATH, 'logs/\n');
-    console.log('Added logs/ to .gitignore file');
+function ensureGitignore() {
+  // Create .gitignore if it doesn't exist
+  const GITIGNORE_PATH = path.join(__dirname, '.gitignore');
+  if (!fs.existsSync(GITIGNORE_PATH)) {
+    fs.writeFileSync(GITIGNORE_PATH, 'node_modules/\n.env\nlogs/\n');
+    console.log('Created .gitignore file');
+  } else {
+    // Append logs/ to .gitignore if not already present
+    const gitignoreContent = fs.readFileSync(GITIGNORE_PATH, 'utf8');
+    if (!gitignoreContent.includes('logs/')) {
+      fs.appendFileSync(GITIGNORE_PATH, 'logs/\n');
+      console.log('Added logs/ to .gitignore file');
+    }
   }
 }
 
